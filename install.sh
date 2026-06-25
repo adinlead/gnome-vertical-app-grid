@@ -6,7 +6,7 @@ for arg in "$@"; do
     [ "$arg" = "--bundle" ] && BUNDLE=1
 done
 
-NAME="vertical-app-grid"
+NAME="ez-launcher"
 DOMAIN="lublst.github.io"
 ZIP_NAME="$NAME@$DOMAIN.zip"
 

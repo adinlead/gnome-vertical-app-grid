@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
-  <schema id="org.gnome.shell.extensions.vertical-app-grid" path="/org/gnome/shell/extensions/vertical-app-grid/">
+  <schema id="org.gnome.shell.extensions.ez-launcher" path="/org/gnome/shell/extensions/ez-launcher/">
 
     <key name="animate-scroll" type="b">
       <default>true</default>
@@ -11,7 +11,7 @@
     </key>
 
     <key name="columns" type="i">
-      <default>6</default>
+      <default>9</default>
     </key>
 
     <key name="favorites-section" type="b">
