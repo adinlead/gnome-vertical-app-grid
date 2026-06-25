@@ -4,4 +4,8 @@ vertical one. App icon size and spacing can be customized in the extension
 preferences. The implementation is very basic, so drag-and-drop reordering and
 app folders are currently not supported.
 
+## disable categorize
 ![Screenshot](assets/vertical-app-grid.png)
+
+## enable categorize
+![Screenshot](assets/vertical-app-grid-categorize.png)
