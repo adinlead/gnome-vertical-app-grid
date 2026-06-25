@@ -7,7 +7,7 @@ for arg in "$@"; do
 done
 
 NAME="ez-launcher"
-DOMAIN="lublst.github.io"
+DOMAIN="linux.itez.cc"
 ZIP_NAME="$NAME@$DOMAIN.zip"
 
 echo ":: Compiling translations..."

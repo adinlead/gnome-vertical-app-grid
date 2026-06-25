@@ -1,6 +1,6 @@
 {
   "description": "A vertical app grid with category grouping functione",
-  "gettext-domain": "ez-launcher@Linux.itez.cc",
+  "gettext-domain": "ez-launcher@linux.itez.cc",
   "name": "Ez Launcher",
   "settings-schema": "org.gnome.shell.extensions.ez-launcher",
   "shell-version": [
@@ -9,6 +9,6 @@
     "50"
   ],
   "url": "https://github.com/adinlead/gnome-ez-launcher/tree/taxonomic",
-  "uuid": "ez-launcher@Linux.itez.cc",
-  "version": 2
+  "uuid": "ez-launcher@linux.itez.cc",
+  "version": 3
 }
