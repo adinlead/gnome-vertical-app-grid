@@ -59,6 +59,12 @@ msgstr "Espaçamento dos ícones"
 msgid "Group by Category"
 msgstr "Group by Category"
 
+msgid "Edit Categories Profile"
+msgstr "Edit Categories Profile"
+
+msgid "Open the categories configuration file"
+msgstr "Open the categories configuration file"
+
 msgid "System"
 msgstr "System"
 

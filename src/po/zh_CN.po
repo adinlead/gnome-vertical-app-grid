@@ -44,6 +44,12 @@ msgstr "显示收藏夹区域"
 msgid "Group by Category"
 msgstr "按类型分组"
 
+msgid "Edit Categories Profile"
+msgstr "编辑分组配置"
+
+msgid "Open the categories configuration file"
+msgstr "打开分组配置文件"
+
 msgid "Smooth Scrolling"
 msgstr "平滑滚动"
 

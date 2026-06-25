@@ -10,74 +10,19 @@ import * as AppDisplay from 'resource:///org/gnome/shell/ui/appDisplay.js';
 import * as AppFavorites from 'resource:///org/gnome/shell/ui/appFavorites.js';
 import * as ParentalControlsManager from 'resource:///org/gnome/shell/misc/parentalControlsManager.js';
 
+import { gettext as _ } from 'resource:///org/gnome/shell/extensions/extension.js';
 import { SIDE_CONTROLS_ANIMATION_TIME } from 'resource:///org/gnome/shell/ui/overviewControls.js';
+
+import { CATEGORY_ORDER, getAppCategory } from './categories.js';
 
 function easeOutCubic(t) {
   return (--t) * t * t + 1;
 }
 
-const CATEGORY_ORDER = [
-  'System',
-  'Accessories',
-  'Development',
-  'Education',
-  'Games',
-  'Graphics',
-  'Internet',
-  'Multimedia',
-  'Office',
-  'Science',
-  'Settings',
-  'Utility',
-];
-
-function createCategoryTranslations(_) {
-  return {
-    'System': _('System'),
-    'Accessories': _('Accessories'),
-    'Development': _('Development'),
-    'Education': _('Education'),
-    'Games': _('Games'),
-    'Graphics': _('Graphics'),
-    'Internet': _('Internet'),
-    'Multimedia': _('Multimedia'),
-    'Office': _('Office'),
-    'Science': _('Science'),
-    'Settings': _('Settings'),
-    'Utility': _('Utility'),
-    'Other': _('Other'),
-  };
-}
-
-function getAppCategory(appInfo) {
-  try {
-    const categories = appInfo.get_categories();
-    if (!categories)
-      return 'Other';
-
-    for (const category of CATEGORY_ORDER) {
-      if (categories.includes(category))
-        return category;
-    }
-
-    const categoryList = categories.split(';');
-    for (const cat of categoryList) {
-      const trimmed = cat.trim();
-      if (trimmed && CATEGORY_ORDER.includes(trimmed))
-        return trimmed;
-    }
-  }
-  catch (e) {
-    console.error('Error getting app category:', e);
-  }
-  return 'Other';
-}
-
 export const VerticalAppDisplay = GObject.registerClass(
 class VerticalAppDisplay extends St.Widget {
-  _init(settings, gettext) {
+  _init(settings) {
     this._settings = settings;
-    this._gettext = gettext;
     this._laters = global.compositor.get_laters();
 
     super._init({
@@ -86,7 +31,30 @@ class VerticalAppDisplay extends St.Widget {
       reactive: true
     });
 
+    this._favoritesLabel = new St.Label({
+      style_class: 'search-statustext',
+      text: _('Favorites')
+    });
+
+    this._favoritesView = new St.Viewport({
+      layout_manager: new VerticalLayout(settings)
+    });
+
+    this._mainLabel = new St.Label({
+      style_class: 'search-statustext',
+      text: _('All Apps')
+    });
+
+    this._mainView = new St.Viewport({
+      layout_manager: new VerticalLayout(settings)
+    });
+
     this._scrollView = new VerticalScrollView(settings);
+
+    this._scrollView.add_child(this._favoritesLabel);
+    this._scrollView.add_child(this._favoritesView);
+    this._scrollView.add_child(this._mainLabel);
+    this._scrollView.add_child(this._mainView);
 
     this.add_child(this._scrollView);
 
@@ -102,22 +70,27 @@ class VerticalAppDisplay extends St.Widget {
   }
 
   _connectSignals() {
+    // Redisplay the app grid when an app was installed or removed
     this._appSystem.connectObject('installed-changed', () => {
       this._redisplay();
     }, this);
 
+    // Redisplay when favorites change
     this._appFavorites.connectObject('changed', () => {
       this._redisplay();
     }, this);
 
+    // Redisplay when parental controls change
     this._parentalControls.connectObject('app-filter-changed', () => {
       this._redisplay();
     }, this);
 
+    // Reset scroll when the overview is hidden
     this._overview.connectObject('hidden', () => {
       this._scrollView.scrollTo(0, false);
     }, this);
 
+    // Update layout when settings change
     this._settings.connectObject('changed', (_, key) => {
       switch (key) {
         case 'app-sorting':
@@ -140,33 +113,55 @@ class VerticalAppDisplay extends St.Widget {
     const favSection = this._settings.get_boolean('favorites-section');
     const categoryGrouping = this._settings.get_boolean('category-grouping');
 
+    this._appIcons = [];
     this._categoryLabels = {};
     this._categoryViews = {};
-    this._appIcons = [];
 
     if (categoryGrouping) {
-      const categories = this._loadAppsByCategory();
+      // Category grouping mode - hide original mainLabel/mainView
+      this._mainLabel.hide();
+      this._mainView.hide();
+      this._favoritesLabel.hide();
+      this._favoritesView.hide();
 
-      for (const category of CATEGORY_ORDER) {
-        if (!categories[category] || categories[category].length === 0)
-          continue;
+      const appsByCategory = this._loadAppsByCategory();
 
-        let hasNonFavApps = false;
-        for (const appId of categories[category]) {
-          if (!(favSection && this._appFavorites.isFavorite(appId))) {
-            hasNonFavApps = true;
-            break;
-          }
+      // First, add favorites section if enabled
+      if (favSection && appsByCategory._favorites.length > 0) {
+        const favLabel = new St.Label({
+          style_class: 'search-statustext',
+          text: _('Favorites')
+        });
+        const favView = new St.Viewport({
+          layout_manager: new VerticalLayout(this._settings)
+        });
+
+        this._categoryLabels['_favorites'] = favLabel;
+        this._categoryViews['_favorites'] = favView;
+
+        // Insert at the beginning to ensure favorites is always on top
+        this._scrollView.get_child().insert_child_at_index(favLabel, 0);
+        this._scrollView.get_child().insert_child_at_index(favView, 1);
+
+        for (const appId of appsByCategory._favorites) {
+          const app = this._appSystem.lookup_app(appId);
+          if (!app) continue;
+          const appIcon = new AppDisplay.AppIcon(app, { isDraggable: false });
+          appIcon.icon.setIconSize(iconSize);
+          favView.add_child(appIcon);
+          this._appIcons.push(appIcon);
         }
+      }
 
-        if (!hasNonFavApps)
-          continue;
+      // Then add category sections
+      for (const category of CATEGORY_ORDER) {
+        const appIds = appsByCategory[category];
+        if (!appIds || appIds.length === 0) continue;
 
         const label = new St.Label({
           style_class: 'search-statustext',
-          text: this._gettext(category)
+          text: _(category)
         });
-
         const view = new St.Viewport({
           layout_manager: new VerticalLayout(this._settings)
         });
@@ -177,52 +172,22 @@ class VerticalAppDisplay extends St.Widget {
         this._scrollView.add_child(label);
         this._scrollView.add_child(view);
 
-        for (const appId of categories[category]) {
+        for (const appId of appIds) {
           const app = this._appSystem.lookup_app(appId);
-          if (!app)
-            continue;
-
+          if (!app) continue;
           const appIcon = new AppDisplay.AppIcon(app, { isDraggable: false });
           appIcon.icon.setIconSize(iconSize);
-
-          if (favSection && this._appFavorites.isFavorite(appId)) {
-            if (!this._favoritesLabel) {
-              this._favoritesLabel = new St.Label({
-                style_class: 'search-statustext',
-                text: this._gettext('Favorites')
-              });
-              this._favoritesView = new St.Viewport({
-                layout_manager: new VerticalLayout(this._settings)
-              });
-              this._scrollView.add_child(this._favoritesLabel);
-              this._scrollView.add_child(this._favoritesView);
-            }
-            this._favoritesView.add_child(appIcon);
-          } else {
-            view.add_child(appIcon);
-          }
-
+          view.add_child(appIcon);
           this._appIcons.push(appIcon);
         }
       }
 
-      if (categories['Other'] && categories['Other'].length > 0) {
-        let hasNonFavApps = false;
-        for (const appId of categories['Other']) {
-          if (!(favSection && this._appFavorites.isFavorite(appId))) {
-            hasNonFavApps = true;
-            break;
-          }
-        }
-
-        if (!hasNonFavApps)
-          return;
-
+      // Add Other category if it has apps
+      if (appsByCategory['Other'] && appsByCategory['Other'].length > 0) {
         const label = new St.Label({
           style_class: 'search-statustext',
-          text: this._gettext('Other')
+          text: _('Other')
         });
-
         const view = new St.Viewport({
           layout_manager: new VerticalLayout(this._settings)
         });
@@ -233,100 +198,59 @@ class VerticalAppDisplay extends St.Widget {
         this._scrollView.add_child(label);
         this._scrollView.add_child(view);
 
-        for (const appId of categories['Other']) {
+        for (const appId of appsByCategory['Other']) {
           const app = this._appSystem.lookup_app(appId);
-          if (!app)
-            continue;
-
+          if (!app) continue;
           const appIcon = new AppDisplay.AppIcon(app, { isDraggable: false });
           appIcon.icon.setIconSize(iconSize);
-
-          if (favSection && this._appFavorites.isFavorite(appId)) {
-            if (!this._favoritesLabel) {
-              this._favoritesLabel = new St.Label({
-                style_class: 'search-statustext',
-                text: this._gettext('Favorites')
-              });
-              this._favoritesView = new St.Viewport({
-                layout_manager: new VerticalLayout(this._settings)
-              });
-              this._scrollView.add_child(this._favoritesLabel);
-              this._scrollView.add_child(this._favoritesView);
-            }
-            this._favoritesView.add_child(appIcon);
-          } else {
-            view.add_child(appIcon);
-          }
-
+          view.add_child(appIcon);
           this._appIcons.push(appIcon);
         }
       }
-
-      if (this._favoritesLabel) {
-        const showFav = this._favoritesView.get_children().length > 0;
-        this._favoritesLabel.visible = showFav;
-        this._favoritesView.visible = showFav;
-      }
-
-      for (const category in this._categoryLabels) {
-        const view = this._categoryViews[category];
-        const showCategory = view.get_children().length > 0;
-        this._categoryLabels[category].visible = showCategory;
-        view.visible = showCategory;
-      }
     } else {
+      // Original mode: Favorites and All Apps
+      // Show original labels and views
+      this._favoritesLabel.show();
+      this._favoritesView.show();
+      this._mainLabel.show();
+      this._mainView.show();
+
+      // Ensure favorites is at the top by reordering
+      const scrollBox = this._scrollView.get_child();
+      const favLabelIndex = scrollBox.get_children().indexOf(this._favoritesLabel);
+      const favViewIndex = scrollBox.get_children().indexOf(this._favoritesView);
+
+      if (favLabelIndex !== 0) {
+        scrollBox.set_child_at_index(this._favoritesLabel, 0);
+        scrollBox.set_child_at_index(this._favoritesView, 1);
+      }
+
       const apps = this._loadApps();
 
       for (const appId of apps) {
         const app = this._appSystem.lookup_app(appId);
-        if (!app)
-          continue;
+        if (!app) continue;
 
         const appIcon = new AppDisplay.AppIcon(app, { isDraggable: false });
         appIcon.icon.setIconSize(iconSize);
 
         if (favSection && this._appFavorites.isFavorite(appId)) {
-          if (!this._favoritesLabel) {
-            this._favoritesLabel = new St.Label({
-              style_class: 'search-statustext',
-              text: this._gettext('Favorites')
-            });
-            this._favoritesView = new St.Viewport({
-              layout_manager: new VerticalLayout(this._settings)
-            });
-            this._scrollView.add_child(this._favoritesLabel);
-            this._scrollView.add_child(this._favoritesView);
-          }
           this._favoritesView.add_child(appIcon);
         } else {
-          if (!this._mainLabel) {
-            this._mainLabel = new St.Label({
-              style_class: 'search-statustext',
-              text: this._gettext('All Apps')
-            });
-            this._mainView = new St.Viewport({
-              layout_manager: new VerticalLayout(this._settings)
-            });
-            this._scrollView.add_child(this._mainLabel);
-            this._scrollView.add_child(this._mainView);
-          }
           this._mainView.add_child(appIcon);
         }
 
         this._appIcons.push(appIcon);
       }
 
-      if (this._favoritesLabel) {
-        const showFav = this._favoritesView.get_children().length > 0;
-        this._favoritesLabel.visible = showFav;
-        this._favoritesView.visible = showFav;
-      }
+      const showFavSection = this._favoritesView.get_children().length > 0;
+      const showMainSection = this._mainView.get_children().length > 0;
+      const showMainLabel = showFavSection && showMainSection;
 
-      if (this._mainLabel) {
-        const showMain = this._mainView.get_children().length > 0;
-        this._mainLabel.visible = showMain;
-        this._mainView.visible = showMain;
-      }
+      this._favoritesLabel.visible = showFavSection;
+      this._favoritesView.visible = showFavSection;
+      this._mainLabel.visible = showMainLabel;
+      this._mainView.visible = showMainSection;
     }
   }
 
@@ -335,8 +259,11 @@ class VerticalAppDisplay extends St.Widget {
     const favSection = this._settings.get_boolean('favorites-section');
 
     const appsByCategory = {};
-    CATEGORY_ORDER.forEach(cat => appsByCategory[cat] = []);
+    for (const cat of CATEGORY_ORDER) {
+      appsByCategory[cat] = [];
+    }
     appsByCategory['Other'] = [];
+    appsByCategory['_favorites'] = [];
 
     installedApps.forEach(appInfo => {
       try {
@@ -345,27 +272,29 @@ class VerticalAppDisplay extends St.Widget {
         if (!this._parentalControls.shouldShowApp(appInfo))
           return;
 
-        if (favSection && this._appFavorites.isFavorite(appId))
+        const isFav = this._appFavorites.isFavorite(appId);
+
+        if (favSection && isFav) {
+          appsByCategory['_favorites'].push(appInfo);
           return;
+        }
 
         const category = getAppCategory(appInfo);
         appsByCategory[category].push(appInfo);
-      }
-      catch (e) {
-        console.error('Error loading app:', e);
-      }
+      } catch { }
     });
 
+    // Sort apps within each category
     const appSorting = this._settings.get_string('app-sorting');
 
     for (const category in appsByCategory) {
+      if (category === '_favorites') continue;
+
       appsByCategory[category].sort((a, b) => {
         switch (appSorting) {
           case 'usage':
             return this._appUsage.compare(a.get_id(), b.get_id()) ?? 0;
-
-          case 'alphabetical':
-          default:
+          case 'alphabetical': default:
             return a.get_name().toLowerCase().localeCompare(b.get_name().toLowerCase());
         }
       });
@@ -373,35 +302,51 @@ class VerticalAppDisplay extends St.Widget {
       appsByCategory[category] = appsByCategory[category].map(appInfo => appInfo.get_id());
     }
 
+    // Sort favorites
+    if (appsByCategory['_favorites'].length > 0) {
+      const favSorting = this._settings.get_string('favorites-sorting');
+      const favIds = this._appFavorites._getIds();
+
+      appsByCategory['_favorites'].sort((a, b) => {
+        switch (favSorting) {
+          case 'dash':
+            return favIds.indexOf(a.get_id()) - favIds.indexOf(b.get_id());
+          case 'usage':
+            return this._appUsage.compare(a.get_id(), b.get_id()) ?? 0;
+          case 'alphabetical': default:
+            return a.get_name().toLowerCase().localeCompare(b.get_name().toLowerCase());
+        }
+      });
+
+      appsByCategory['_favorites'] = appsByCategory['_favorites'].map(appInfo => appInfo.get_id());
+    }
+
     return appsByCategory;
   }
 
   _loadApps() {
     const installedApps = this._appSystem.get_installed();
-    const favSection = this._settings.get_boolean('favorites-section');
 
     const favs = [];
     const apps = [];
 
-    installedApps.forEach(appInfo => {
-      try {
-        const appId = appInfo.get_id();
-        const isFav = this._appFavorites.isFavorite(appId);
+    // Filter out hidden apps and split off favorites
+    const favSection = this._settings.get_boolean('favorites-section');
 
-        if (!this._parentalControls.shouldShowApp(appInfo))
-          return;
+    installedApps.forEach(appInfo => { try {
+      const appId = appInfo.get_id();
+      const isFav = this._appFavorites.isFavorite(appId);
 
+      if (this._parentalControls.shouldShowApp(appInfo)) {
         if (favSection && isFav) {
           favs.push(appInfo);
         } else {
           apps.push(appInfo);
         }
       }
-      catch (e) {
-        console.error('Error loading app:', e);
-      }
-    });
+    } catch { } });
 
+    // Sort favorites
     const favSorting = this._settings.get_string('favorites-sorting');
     const favIds = this._appFavorites._getIds();
 
@@ -413,12 +358,12 @@ class VerticalAppDisplay extends St.Widget {
         case 'usage':
           return this._appUsage.compare(a.get_id(), b.get_id()) ?? 0;
 
-        case 'alphabetical':
-        default:
+        case 'alphabetical': default:
           return a.get_name().toLowerCase().localeCompare(b.get_name().toLowerCase());
       }
     });
 
+    // Sort apps
     const appSorting = this._settings.get_string('app-sorting');
 
     apps.sort((a, b) => {
@@ -426,8 +371,7 @@ class VerticalAppDisplay extends St.Widget {
         case 'usage':
           return this._appUsage.compare(a.get_id(), b.get_id()) ?? 0;
 
-        case 'alphabetical':
-        default:
+        case 'alphabetical': default:
           return a.get_name().toLowerCase().localeCompare(b.get_name().toLowerCase());
       }
     });
@@ -438,29 +382,21 @@ class VerticalAppDisplay extends St.Widget {
   _redisplay() {
     this._animateRedisplay(() => {
       this._redisplayLater = this._laters.add(Meta.LaterType.IDLE, () => {
-        if (this._favoritesLabel) {
-          this._favoritesLabel.destroy();
-          this._favoritesLabel = null;
-        }
-        if (this._favoritesView) {
-          this._favoritesView.destroy();
-          this._favoritesView = null;
-        }
+        this._favoritesView.destroy_all_children();
+        this._mainView.destroy_all_children();
 
-        if (this._mainLabel) {
-          this._mainLabel.destroy();
-          this._mainLabel = null;
-        }
-        if (this._mainView) {
-          this._mainView.destroy();
-          this._mainView = null;
-        }
-
+        // Clean up category views if they exist
         for (const category in this._categoryLabels) {
-          this._categoryLabels[category].destroy();
+          if (this._categoryLabels[category]) {
+            this._categoryLabels[category].destroy();
+            this._categoryLabels[category] = null;
+          }
         }
         for (const category in this._categoryViews) {
-          this._categoryViews[category].destroy();
+          if (this._categoryViews[category]) {
+            this._categoryViews[category].destroy();
+            this._categoryViews[category] = null;
+          }
         }
         this._categoryLabels = {};
         this._categoryViews = {};
@@ -483,12 +419,24 @@ class VerticalAppDisplay extends St.Widget {
   _updateLabelMargins() {
     const spacing = this._settings.get_int('icon-spacing');
 
-    if (this._favoritesLabel) {
+    // Original favorites label (non-category mode)
+    if (this._favoritesLabel && this._favoritesLabel.visible) {
       this._favoritesLabel.set_style(`margin: 0 0 ${spacing}px 0;`);
     }
+    // Original main label (non-category mode)
+    if (this._mainLabel && this._mainLabel.visible) {
+      this._mainLabel.set_style(`margin: ${spacing * 2}px 0 ${spacing}px 0;`);
+    }
 
+    // Category labels (including _favorites in category mode)
     for (const category in this._categoryLabels) {
-      this._categoryLabels[category].set_style(`margin: ${spacing * 2}px 0 ${spacing}px 0;`);
+      if (this._categoryLabels[category] && this._categoryLabels[category].visible) {
+        if (category === '_favorites') {
+          this._categoryLabels[category].set_style(`margin: 0 0 ${spacing}px 0;`);
+        } else {
+          this._categoryLabels[category].set_style(`margin: ${spacing * 2}px 0 ${spacing}px 0;`);
+        }
+      }
     }
   }
 
@@ -508,6 +456,7 @@ class VerticalAppDisplay extends St.Widget {
       return Clutter.EVENT_PROPAGATE;
     }
 
+    // Keyboard scroll
     const adjustment = this._scrollView.vadjustment;
     const pageSize = adjustment.page_size;
 
@@ -522,6 +471,7 @@ class VerticalAppDisplay extends St.Widget {
       return this._scrollView.scrollTo(scroll[key]);
     }
 
+    // Tab and arrow key navigation
     const navTarget = this._getNavTarget(focused, key);
 
     if (navTarget) {
@@ -623,6 +573,7 @@ class VerticalScrollView extends St.ScrollView {
   scrollToChild(child) {
     const childBox = child.get_allocation_box();
 
+    // Get the child's vertical position inside the scroll view
     let actor = child;
     let childY = childBox.y1;
 
@@ -630,6 +581,7 @@ class VerticalScrollView extends St.ScrollView {
       childY += actor.get_allocation_box().y1;
     }
 
+    // Scroll to keep the child vertically centered
     const adjustment = this.vadjustment;
 
     const childCenter = childY + childBox.get_height() / 2;
@@ -644,6 +596,8 @@ class VerticalScrollView extends St.ScrollView {
     const adjustment = this.vadjustment;
     const anim = this._scrollAnim;
 
+    // Only scroll if the clamped distance is greater than zero to prevent
+    // rapidly retriggering the animation while holding down a key
     const min = adjustment.lower;
     const max = adjustment.upper - adjustment.page_size;
 
@@ -657,6 +611,7 @@ class VerticalScrollView extends St.ScrollView {
     this._scroll = scrollClamped;
 
     if (animate) {
+      // Init scroll animation
       anim.startTime = now;
       anim.startValue = adjustment.value;
       anim.delta = this.scroll - adjustment.value;
@@ -666,6 +621,7 @@ class VerticalScrollView extends St.ScrollView {
         anim.duration = duration * 1000;
       }
     } else {
+      // Cancel running animation
       if (anim.lock) {
         anim.lock = global.stage.disconnect(anim.lock) || null;
       }
@@ -673,6 +629,7 @@ class VerticalScrollView extends St.ScrollView {
       adjustment.value = this.scroll;
     }
 
+    // Redraw to trigger the next animation frame
     this.queue_redraw();
 
     return Clutter.EVENT_STOP;
@@ -684,6 +641,7 @@ class VerticalScrollView extends St.ScrollView {
     const adjustment = this.vadjustment;
     const anim = this._scrollAnim;
 
+    // Animate towards the scroll target
     const elapsed = now - anim.startTime;
     const progress = Math.clamp(elapsed / anim.duration, 0, 1);
 
@@ -707,10 +665,12 @@ class VerticalScrollView extends St.ScrollView {
   _animateScroll(event) {
     const now = GLib.get_monotonic_time();
 
+    // Ignore emulated events
     if (event.get_flags() & Clutter.EventFlags.FLAG_POINTER_EMULATED) {
       return Clutter.EVENT_STOP;
     }
 
+    // Get scroll delta
     const adjustment = this.vadjustment;
 
     const direction = event.get_scroll_direction();
@@ -720,6 +680,9 @@ class VerticalScrollView extends St.ScrollView {
     let animate = false;
 
     if (direction === Clutter.ScrollDirection.SMOOTH) {
+      // Sometimes events without a smooth delta are emitted when using a
+      // trackpad, so this debounce timestamp is used to prevent any sudden
+      // jumps while scrolling
       this._trackpadTime = now;
 
       delta = event.get_scroll_delta()[Clutter.Orientation.VERTICAL] ?? 0;
@@ -733,6 +696,7 @@ class VerticalScrollView extends St.ScrollView {
       animate = true;
     }
 
+    // Animate to the new scroll position
     const min = adjustment.lower;
     const max = adjustment.upper - adjustment.page_size;
 
